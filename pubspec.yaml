@@ -1,0 +1,33 @@
+name: color_carnival
+description: A fun color matching game for kids
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flame: ^1.10.0
+  audioplayers: ^6.5.1
+  provider: ^6.0.5
+  shared_preferences: ^2.2.2
+  confetti: ^0.7.0
+  rive: ^0.11.0
+  google_fonts: ^6.1.0
+  vector_math: ^2.1.4
+
+flutter:
+  uses-material-design: true
+  
+  assets:
+    - assets/images/
+    - assets/animals/
+    - assets/sounds/
+    
+  fonts:
+    - family: ComicNeue
+      fonts:
+        - asset: assets/fonts/ComicNeue-Regular.ttf
+        - asset: assets/fonts/ComicNeue-Bold.ttf
+          weight: 700
