@@ -25,9 +25,9 @@ class _PlayScreenState extends State<PlayScreen> with SingleTickerProviderStateM
   final AudioPlayer _audioPlayer = AudioPlayer();
   final AudioPlayer _musicPlayer = AudioPlayer();
   
-  // Catcher properties - MUST MATCH GAME ENGINE DIMENSIONS
-  final double _catcherHeight = 75; // Same as in GameEngine calculations
-  final double _catcherWidth = 200; // Same as in GameEngine calculations
+  // Catcher properties
+  final double _catcherHeight = 75;
+  final double _catcherWidth = 200;
   double _catcherPosition = 0.5;
   
   // Screen dimensions
@@ -48,7 +48,7 @@ class _PlayScreenState extends State<PlayScreen> with SingleTickerProviderStateM
   bool _showTutorial = true;
   Timer? _tutorialTimer;
   bool _gameStarted = false;
-  double _catcherEnergy = 0.0; // For visual feedback
+  double _catcherEnergy = 0.0;
   
   // Settings loaded from persistence
   bool _soundEnabled = true;
@@ -57,14 +57,14 @@ class _PlayScreenState extends State<PlayScreen> with SingleTickerProviderStateM
   
   // Track balls that have been caught in this frame
   final Set<int> _caughtThisFrame = <int>{};
+  
+  // Level completion tracking
+  bool _showLevelCompleteOverlay = false;
 
   @override
   void initState() {
     super.initState();
     game = GameEngine();
-    if (widget.startingLevel != null) {
-      game.level = widget.startingLevel!;
-    }
     
     // Initialize animations
     _catcherController = AnimationController(
@@ -114,7 +114,11 @@ class _PlayScreenState extends State<PlayScreen> with SingleTickerProviderStateM
     _vibrationEnabled = await DataPersistenceService.getVibrationEnabled();
     
     // Initialize game after loading settings
-    await game.startNewGame();
+    if (widget.startingLevel != null) {
+      await game.startLevel(widget.startingLevel!);
+    } else {
+      await game.startNewGame();
+    }
     
     if (mounted) {
       setState(() {});
@@ -160,6 +164,13 @@ class _PlayScreenState extends State<PlayScreen> with SingleTickerProviderStateM
     
     // Update game logic
     game.update(0.016);
+    
+    // Check for level completion
+    if (game.isLevelComplete && !_showLevelCompleteOverlay) {
+      _showLevelCompleteOverlay = true;
+      _confettiController.play();
+      _playSound('assets/sounds/level_complete.mp3');
+    }
     
     // Update catcher energy based on balls in zones
     if (game.ballsInCatchZone.isNotEmpty) {
@@ -233,7 +244,7 @@ class _PlayScreenState extends State<PlayScreen> with SingleTickerProviderStateM
         behavior: HitTestBehavior.opaque,
         child: Stack(
           children: [
-            // Background with dynamic gradient based on catcher energy
+            // Background with dynamic gradient
             Container(
               decoration: BoxDecoration(
                 gradient: RadialGradient(
@@ -248,14 +259,14 @@ class _PlayScreenState extends State<PlayScreen> with SingleTickerProviderStateM
               ),
             ),
             
-            // Catch zone visualization - NOW MATCHES VISUAL CATCHER EXACTLY
+            // Catch zone visualization
             if (_gameStarted && !game.isPaused)
               _buildCatchZones(),
             
             // Game elements
             _buildGameElements(),
             
-            // Creative Catcher - Positioned 160px from bottom
+            // Creative Catcher
             if (_gameStarted && !game.isPaused) 
               Positioned(
                 left: _catcherPosition * _screenWidth - (_catcherWidth / 2),
@@ -271,7 +282,7 @@ class _PlayScreenState extends State<PlayScreen> with SingleTickerProviderStateM
               child: _buildHeader(),
             ),
             
-            // Control buttons - Moved lower
+            // Control buttons
             Positioned(
               bottom: 60,
               left: 0,
@@ -281,6 +292,9 @@ class _PlayScreenState extends State<PlayScreen> with SingleTickerProviderStateM
             
             // Tutorial overlay
             if (_showTutorial) _buildTutorialOverlay(),
+            
+            // Level complete overlay
+            if (_showLevelCompleteOverlay) _buildLevelCompleteOverlay(),
             
             // Game over overlay
             if (game.isGameOver) _buildGameOverOverlay(),
@@ -675,184 +689,155 @@ class _PlayScreenState extends State<PlayScreen> with SingleTickerProviderStateM
     );
   }
   
-  void _onBallCaught(GameBall ball) {
-    final catchDetails = game.getCatchDetails(ball);
-    final quality = catchDetails['quality']!;
-    
-    // Add catch glow effect
-    _catchGlows.add(CatchGlow(
-      color: ball.color,
-      x: ball.x,
-      y: ball.y,
-      size: ball.size * 1.5,
-      startTime: DateTime.now(),
-    ));
-    
-    // Add floating score with quality indicator
-    String scoreText = ball.isPowerUp ? '50' : '10';
-    if (quality >= 1.3) {
-      scoreText += '✨';
-    } else if (quality >= 1.0) {
-      scoreText += '★';
-    }
-    
-    _floatingScores.add(FloatingScore(
-      value: game.combo > 1 ? '${scoreText} x${game.combo}' : scoreText,
-      x: ball.x,
-      y: ball.y,
-      color: quality >= 1.3 ? Colors.yellow : ball.color,
-      startTime: DateTime.now(),
-    ));
-    
-    // Play catch sound based on quality
-    if (quality >= 1.3) {
-      _playSound('assets/sounds/perfect_catch.mp3');
-    } else {
-      _playSound('assets/sounds/catch.mp3');
-    }
-    
-    // Save completed level if this was a level play
-    if (widget.startingLevel != null) {
-      DataPersistenceService.markLevelCompleted(widget.startingLevel!);
-      
-      // Update unlocked levels - only unlock next level
-      DataPersistenceService.getUnlockedLevels().then((currentUnlocked) {
-        if (widget.startingLevel! == currentUnlocked) {
-          DataPersistenceService.saveUnlockedLevels(widget.startingLevel! + 1);
-        }
-      });
-    }
-    
-    // Remove catch effect after delay
-    Future.delayed(const Duration(milliseconds: 300), () {
-      if (mounted && _catchEffects.contains(ball.color)) {
-        setState(() {
-          _catchEffects.remove(ball.color);
-        });
-      }
-    });
-    
-    // Remove glow after delay
-    Future.delayed(const Duration(milliseconds: 500), () {
-      if (mounted) {
-        setState(() {
-          _catchGlows.removeWhere((glow) => glow.color == ball.color);
-        });
-      }
-    });
-    
-    // Force immediate UI update
-    if (mounted) {
-      setState(() {});
-    }
-  }
-  
   Widget _buildHeader() {
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        child: Column(
           children: [
-            // Back button
-            GestureDetector(
-              onTap: () {
-                _musicPlayer.stop();
-                _gameTimer?.cancel();
-                Navigator.pop(context);
-              },
-              child: Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: Colors.blue.withOpacity(0.8),
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.3),
-                      blurRadius: 4,
-                      offset: const Offset(2, 2),
+            // Top row: Back button and stats
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                // Back button
+                GestureDetector(
+                  onTap: () {
+                    _musicPlayer.stop();
+                    _gameTimer?.cancel();
+                    Navigator.pop(context);
+                  },
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: Colors.blue.withOpacity(0.8),
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.3),
+                          blurRadius: 4,
+                          offset: const Offset(2, 2),
+                        ),
+                      ],
                     ),
-                  ],
+                    child: const Icon(Icons.arrow_back, color: Colors.white, size: 20),
+                  ),
                 ),
-                child: const Icon(Icons.arrow_back, color: Colors.white, size: 20),
-              ),
-            ),
-            
-            // Score
-            _buildStatCard(
-              '${game.score}',
-              Icons.star,
-              Colors.amber,
-              showHighScore: true,
-              highScore: game.highScore,
-            ),
-            
-            // Level
-            _buildStatCard(
-              '${game.level}',
-              Icons.flag,
-              Colors.green,
-            ),
-            
-            // Combo
-            if (game.combo > 1)
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      Colors.orange.withOpacity(0.8),
-                      Colors.red.withOpacity(0.8),
+                
+                // Level and score
+                _buildStatCard(
+                  'Level ${game.level}',
+                  Icons.flag,
+                  Colors.green,
+                ),
+                
+                // Score
+                _buildStatCard(
+                  '${game.score}',
+                  Icons.star,
+                  Colors.amber,
+                ),
+                
+                // Combo
+                if (game.combo > 1)
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          Colors.orange.withOpacity(0.8),
+                          Colors.red.withOpacity(0.8),
+                        ],
+                      ),
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.orange.withOpacity(0.5),
+                          blurRadius: 10,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                      border: Border.all(color: Colors.white.withOpacity(0.5), width: 1),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.bolt, color: Colors.white, size: 16),
+                        const SizedBox(width: 6),
+                        Text(
+                          '${game.combo}x COMBO',
+                          style: GoogleFonts.comicNeue(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                
+                // Lives
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.6),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.red.withOpacity(0.5)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.favorite, color: Colors.red, size: 16),
+                      const SizedBox(width: 6),
+                      Text(
+                        '${game.lives}',
+                        style: GoogleFonts.comicNeue(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
                     ],
                   ),
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.orange.withOpacity(0.5),
-                      blurRadius: 10,
-                      spreadRadius: 2,
-                    ),
-                  ],
-                  border: Border.all(color: Colors.white.withOpacity(0.5), width: 1),
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.bolt, color: Colors.white, size: 16),
-                    const SizedBox(width: 6),
-                    Text(
-                      '${game.combo}x COMBO',
-                      style: GoogleFonts.comicNeue(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              ],
+            ),
             
-            // Lives
+            // Level progress bar
+            const SizedBox(height: 12),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.6),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.red.withOpacity(0.5)),
-              ),
-              child: Row(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: Column(
                 children: [
-                  Icon(Icons.favorite, color: Colors.red, size: 16),
-                  const SizedBox(width: 6),
-                  Text(
-                    '${game.lives}',
-                    style: GoogleFonts.comicNeue(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Level ${game.level}',
+                        style: GoogleFonts.comicNeue(
+                          fontSize: 14,
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Text(
+                        '${game.ballsCaughtInLevel}/${game.ballsRequiredForNextLevel} Balls',
+                        style: GoogleFonts.comicNeue(
+                          fontSize: 14,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  LinearProgressIndicator(
+                    value: game.getLevelProgress(),
+                    backgroundColor: Colors.grey.withOpacity(0.3),
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      GameEngine.ballColors[game.level % GameEngine.ballColors.length],
                     ),
+                    minHeight: 8,
+                    borderRadius: BorderRadius.circular(4),
                   ),
                 ],
               ),
@@ -916,6 +901,197 @@ class _PlayScreenState extends State<PlayScreen> with SingleTickerProviderStateM
               ),
             ),
         ],
+      ),
+    );
+  }
+  
+  Widget _buildLevelCompleteOverlay() {
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black.withOpacity(0.8),
+        child: Center(
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Material(
+                color: Colors.transparent,
+                child: Container(
+                  padding: const EdgeInsets.all(30),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        Color(0xFF4CAF50),
+                        Color(0xFF8BC34A),
+                        Color(0xFFCDDC39),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(25),
+                    border: Border.all(color: Colors.white, width: 4),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.green.withOpacity(0.5),
+                        blurRadius: 30,
+                        spreadRadius: 10,
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.emoji_events,
+                        size: 80,
+                        color: Colors.white,
+                      ),
+                      const SizedBox(height: 20),
+                      Text(
+                        'LEVEL ${game.level} COMPLETE!',
+                        style: GoogleFonts.comicNeue(
+                          fontSize: 36,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                          letterSpacing: 2,
+                          shadows: [
+                            Shadow(
+                              color: Colors.black.withOpacity(0.5),
+                              blurRadius: 10,
+                              offset: const Offset(3, 3),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      Text(
+                        '🎉 You caught ${game.ballsCaughtInLevel} balls! 🎉',
+                        style: GoogleFonts.comicNeue(
+                          fontSize: 22,
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 15),
+                      Container(
+                        padding: const EdgeInsets.all(15),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(15),
+                          border: Border.all(color: Colors.white.withOpacity(0.3)),
+                        ),
+                        child: Column(
+                          children: [
+                            Text(
+                              'Level ${game.level + 1} awaits!',
+                              style: GoogleFonts.comicNeue(
+                                fontSize: 20,
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Catch ${10 + (game.level * 5)} balls to complete',
+                              style: GoogleFonts.comicNeue(
+                                fontSize: 16,
+                                color: Colors.white.withOpacity(0.9),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 30),
+                      Wrap(
+                        spacing: 15,
+                        runSpacing: 15,
+                        alignment: WrapAlignment.center,
+                        children: [
+                          ElevatedButton.icon(
+                            onPressed: () async {
+                              // Start next level
+                              await game.startLevel(game.level + 1);
+                              _showLevelCompleteOverlay = false;
+                              _gameStarted = true;
+                              game.isPaused = false;
+                              _startGameLoop();
+                              setState(() {});
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.green,
+                              padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 18),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              elevation: 10,
+                            ),
+                            icon: const Icon(Icons.play_arrow, size: 24),
+                            label: Text(
+                              'NEXT LEVEL',
+                              style: GoogleFonts.comicNeue(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          ElevatedButton.icon(
+                            onPressed: () {
+                              _musicPlayer.stop();
+                              _gameTimer?.cancel();
+                              Navigator.pop(context);
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.blue,
+                              padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 18),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              elevation: 10,
+                            ),
+                            icon: const Icon(Icons.home, size: 24),
+                            label: Text(
+                              'GO HOME',
+                              style: GoogleFonts.comicNeue(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          ElevatedButton.icon(
+                            onPressed: () async {
+                              // Replay same level
+                              await game.startLevel(game.level);
+                              _showLevelCompleteOverlay = false;
+                              _gameStarted = true;
+                              game.isPaused = false;
+                              _startGameLoop();
+                              setState(() {});
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.orange,
+                              padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 18),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              elevation: 10,
+                            ),
+                            icon: const Icon(Icons.replay, size: 24),
+                            label: Text(
+                              'PLAY AGAIN',
+                              style: GoogleFonts.comicNeue(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -1262,7 +1438,6 @@ class _PlayScreenState extends State<PlayScreen> with SingleTickerProviderStateM
                             onPressed: () {
                               _musicPlayer.stop();
                               _gameTimer?.cancel();
-                              _catcherController.dispose();
                               Navigator.pop(context);
                             },
                             style: ElevatedButton.styleFrom(
@@ -1293,6 +1468,66 @@ class _PlayScreenState extends State<PlayScreen> with SingleTickerProviderStateM
         ),
       ),
     );
+  }
+  
+  void _onBallCaught(GameBall ball) {
+    final catchDetails = game.getCatchDetails(ball);
+    final quality = catchDetails['quality']!;
+    
+    // Add catch glow effect
+    _catchGlows.add(CatchGlow(
+      color: ball.color,
+      x: ball.x,
+      y: ball.y,
+      size: ball.size * 1.5,
+      startTime: DateTime.now(),
+    ));
+    
+    // Add floating score with quality indicator
+    String scoreText = ball.isPowerUp ? '50' : '10';
+    if (quality >= 1.3) {
+      scoreText += '✨';
+    } else if (quality >= 1.0) {
+      scoreText += '★';
+    }
+    
+    _floatingScores.add(FloatingScore(
+      value: game.combo > 1 ? '${scoreText} x${game.combo}' : scoreText,
+      x: ball.x,
+      y: ball.y,
+      color: quality >= 1.3 ? Colors.yellow : ball.color,
+      startTime: DateTime.now(),
+    ));
+    
+    // Play catch sound based on quality
+    if (quality >= 1.3) {
+      _playSound('assets/sounds/perfect_catch.mp3');
+    } else {
+      _playSound('assets/sounds/catch.mp3');
+    }
+    
+    // Remove catch effect after delay
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted && _catchEffects.contains(ball.color)) {
+        setState(() {
+          _catchEffects.remove(ball.color);
+        });
+      }
+    });
+    
+    // Remove glow after delay
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted) {
+        setState(() {
+          _catchGlows.removeWhere((glow) => glow.color == ball.color);
+        });
+      }
+    });
+    
+    // Force immediate UI update
+    if (mounted) {
+      setState(() {});
+    }
   }
   
   void _updateEffects() {
